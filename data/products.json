@@ -3,8 +3,8 @@
     "id": "prod-001",
     "name": "Filtro de aceite 3M",
     "category": "Filtros de aceite",
-    "stock": 5,
-    "price": 349.50,
+    "stock": 10,
+    "price": 349.5,
     "image": null
   },
   {
@@ -20,7 +20,7 @@
     "name": "Filtro de gasolina Fram",
     "category": "Filtros de gasolina",
     "stock": 6,
-    "price": 299.50,
+    "price": 299.5,
     "image": null
   },
   {
@@ -36,7 +36,7 @@
     "name": "Toma de agua Chevrolet",
     "category": "Tomas de agua",
     "stock": 4,
-    "price": 599.00,
+    "price": 599,
     "image": null
   },
   {
@@ -52,7 +52,7 @@
     "name": "Refrigerante rojo 1L",
     "category": "Refrigerantes",
     "stock": 10,
-    "price": 149.50,
+    "price": 149.5,
     "image": null
   },
   {
