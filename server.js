@@ -109,17 +109,51 @@ function requireAdmin(req, res, next) {
   return res.status(403).json({ ok: false, message: 'Acceso denegado' });
 }
 
+// Validación de producto
+function validateProduct(data) {
+  const errors = [];
+  
+  if (!data.name || data.name.trim().length === 0) {
+    errors.push('El nombre del producto es requerido');
+  } else if (data.name.trim().length > 100) {
+    errors.push('El nombre no puede exceder 100 caracteres');
+  }
+  
+  if (!data.category || data.category.trim().length === 0) {
+    errors.push('La categoría es requerida');
+  }
+  
+  const stock = Number(data.stock);
+  if (isNaN(stock) || stock < 0) {
+    errors.push('El stock debe ser un número igual o mayor a 0');
+  }
+  
+  const price = Number(data.price);
+  if (isNaN(price) || price < 0) {
+    errors.push('El precio debe ser un número igual o mayor a 0');
+  }
+  
+  return errors;
+}
+
 // Create product
 app.post('/api/admin/products', requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const { name, category, stock, price } = req.body;
+    
+    // Validar entrada
+    const errors = validateProduct({ name, category, stock, price });
+    if (errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
+    }
+    
     const id = uuidv4();
     const image = req.file ? '/uploads/' + path.basename(req.file.path) : null;
     const createdAt = new Date().toISOString();
 
     await db.run(
       `INSERT INTO products (id, name, category, stock, price, image, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      id, name, category, Number(stock || 0), Number(price || 0), image, createdAt
+      id, name.trim(), category.trim(), Number(stock), Number(price), image, createdAt
     );
 
     const product = await db.get('SELECT * FROM products WHERE id = ?', id);
@@ -135,9 +169,15 @@ app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), async (
   try {
     const { id } = req.params;
     const { name, category, stock, price } = req.body;
+    
+    // Validar entrada
+    const errors = validateProduct({ name, category, stock, price });
+    if (errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
+    }
 
     const product = await db.get('SELECT * FROM products WHERE id = ?', id);
-    if (!product) return res.status(404).json({ ok: false });
+    if (!product) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
 
     // Delete old image if updating with new one
     if (req.file && product.image) {
@@ -145,10 +185,10 @@ app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), async (
     }
 
     const updated = {
-      name: name !== undefined ? name : product.name,
-      category: category !== undefined ? category : product.category,
-      stock: stock !== undefined ? Number(stock) : product.stock,
-      price: price !== undefined ? Number(price) : product.price,
+      name: name && name.trim().length > 0 ? name.trim() : product.name,
+      category: category && category.trim().length > 0 ? category.trim() : product.category,
+      stock: stock !== undefined && !isNaN(Number(stock)) ? Number(stock) : product.stock,
+      price: price !== undefined && !isNaN(Number(price)) ? Number(price) : product.price,
       image: req.file ? '/uploads/' + path.basename(req.file.path) : product.image
     };
 
@@ -170,8 +210,12 @@ app.delete('/api/admin/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
+    if (!id || id.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: 'ID de producto inválido' });
+    }
+
     const product = await db.get('SELECT * FROM products WHERE id = ?', id);
-    if (!product) return res.status(404).json({ ok: false });
+    if (!product) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
 
     await db.run('DELETE FROM products WHERE id = ?', id);
 
@@ -179,23 +223,63 @@ app.delete('/api/admin/products/:id', requireAdmin, async (req, res) => {
       try { fs.unlinkSync(path.join(__dirname, product.image)); } catch (e) {}
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, message: 'Producto eliminado exitosamente' });
   } catch (err) {
     console.error('Error deleting product:', err);
     res.status(500).json({ ok: false, error: 'Error al eliminar producto' });
   }
 });
 
+// Validación de cita
+function validateAppointment(data) {
+  const errors = [];
+  
+  if (!data.name || data.name.trim().length === 0) {
+    errors.push('El nombre es requerido');
+  }
+  
+  if (!data.whatsapp || data.whatsapp.trim().length === 0) {
+    errors.push('El WhatsApp es requerido');
+  } else if (!/^\d{10,}$/.test(data.whatsapp.replace(/\D/g, ''))) {
+    errors.push('El WhatsApp debe tener al menos 10 dígitos');
+  }
+  
+  if (!data.carModel || data.carModel.trim().length === 0) {
+    errors.push('El modelo del vehículo es requerido');
+  }
+  
+  if (!data.description || data.description.trim().length === 0) {
+    errors.push('La descripción del servicio es requerida');
+  }
+  
+  if (!data.date || data.date.trim().length === 0) {
+    errors.push('La fecha es requerida');
+  }
+  
+  if (!data.time || data.time.trim().length === 0) {
+    errors.push('La hora es requerida');
+  }
+  
+  return errors;
+}
+
 // Appointments
 app.post('/api/appointments', async (req, res) => {
   try {
     const { name, whatsapp, carModel, description, date, time, notas } = req.body;
+    
+    // Validar entrada
+    const errors = validateAppointment({ name, whatsapp, carModel, description, date, time });
+    if (errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
+    }
+    
     const id = uuidv4();
     const createdAt = new Date().toISOString();
 
     await db.run(
       `INSERT INTO appointments (id, name, whatsapp, carModel, description, notas, date, time, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, name, whatsapp, carModel, description, notas || '', date, time, createdAt
+      id, name.trim(), whatsapp.trim(), carModel.trim(), description.trim(), notas || '', date.trim(), time.trim(), createdAt
     );
 
     // Send email to configured admin email

@@ -7,6 +7,13 @@ const editModal = document.getElementById('edit-modal');
 const editForm = document.getElementById('edit-product-form');
 const cancelEditBtn = document.getElementById('cancel-edit');
 
+// Función para mostrar mensajes
+function showMessage(message, isSuccess = true) {
+  adminMsg.textContent = message;
+  adminMsg.style.color = isSuccess ? '#155724' : '#721c24';
+  adminMsg.style.backgroundColor = isSuccess ? '#d4edda' : '#f8d7da';
+}
+
 // Login
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -63,27 +70,21 @@ document.getElementById('add-product-form').addEventListener('submit', async (e)
     const data = await res.json();
     
     if (data.ok) {
-      adminMsg.textContent = '✓ Producto agregado exitosamente.';
-      adminMsg.style.color = '#155724';
-      adminMsg.style.backgroundColor = '#d4edda';
+      showMessage('✓ Producto agregado exitosamente.', true);
       form.reset();
       loadProducts();
     } else {
-      adminMsg.textContent = '❌ Error agregando producto.';
-      adminMsg.style.color = '#721c24';
-      adminMsg.style.backgroundColor = '#f8d7da';
+      showMessage(`❌ ${data.details ? data.details.join(', ') : data.error}`, false);
     }
   } catch (err) {
     console.error('Error:', err);
-    adminMsg.textContent = '❌ Error de conexión.';
-    adminMsg.style.color = '#721c24';
-    adminMsg.style.backgroundColor = '#f8d7da';
+    showMessage('❌ Error de conexión.', false);
   } finally {
     btn.disabled = false;
   }
 });
 
-// Cargar productos
+// Cargar productos - SIN event listeners duplicados
 async function loadProducts() {
   try {
     const res = await fetch('/api/products');
@@ -112,81 +113,86 @@ async function loadProducts() {
       adminProducts.appendChild(card);
     });
 
-    // Eventos de eliminar
-    document.querySelectorAll('.delete').forEach(btn => {
-      btn.addEventListener('click', async (ev) => {
-        const id = ev.target.closest('.delete').dataset.id;
-        if (!confirm('¿Eliminar este producto?')) return;
-        
-        try {
-          const res = await fetch('/api/admin/products/' + id, { method: 'DELETE' });
-          if (res.ok) {
-            loadProducts();
-            adminMsg.textContent = '✓ Producto eliminado.';
-            adminMsg.style.color = '#155724';
-            adminMsg.style.backgroundColor = '#d4edda';
-          }
-        } catch (err) {
-          console.error('Error:', err);
-        }
-      });
-    });
-
-    // Eventos de editar
-    document.querySelectorAll('.edit').forEach(btn => {
-      btn.addEventListener('click', async (ev) => {
-        const id = ev.target.closest('.edit').dataset.id;
-        const product = products.find(p => p.id === id);
-        // Open edit modal and populate fields
-        editModal.style.display = 'block';
-        editForm.elements['id'].value = product.id;
-        editForm.elements['name'].value = product.name || '';
-        editForm.elements['category'].value = product.category || '';
-        editForm.elements['stock'].value = product.stock || 0;
-        editForm.elements['price'].value = Number(product.price || 0).toFixed(2);
-      });
-    });
-  
-    // Cancel edit
-    cancelEditBtn.addEventListener('click', () => {
-      editModal.style.display = 'none';
-      editForm.reset();
-    });
-
-    // Submit edit form
-    editForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = editForm.querySelector('button[type="submit"]');
-      btn.disabled = true;
-
-      try {
-        const id = editForm.elements['id'].value;
-        const fd = new FormData(editForm);
-        const res = await fetch('/api/admin/products/' + id, { method: 'PUT', body: fd });
-        const data = await res.json();
-
-        if (data.ok) {
-          adminMsg.textContent = '✓ Producto actualizado.';
-          adminMsg.style.color = '#155724';
-          adminMsg.style.backgroundColor = '#d4edda';
-          editModal.style.display = 'none';
-          editForm.reset();
-          loadProducts();
-        } else {
-          adminMsg.textContent = '❌ Error al actualizar producto.';
-          adminMsg.style.color = '#721c24';
-          adminMsg.style.backgroundColor = '#f8d7da';
-        }
-      } catch (err) {
-        console.error('Error actualizando producto:', err);
-        adminMsg.textContent = '❌ Error de conexión.';
-        adminMsg.style.color = '#721c24';
-        adminMsg.style.backgroundColor = '#f8d7da';
-      } finally {
-        btn.disabled = false;
-      }
-    });
+    // Usar delegación de eventos para evitar duplicados
+    adminProducts.addEventListener('click', handleProductAction);
   } catch (err) {
     console.error('Error cargando productos:', err);
+    showMessage('❌ Error al cargar productos', false);
   }
 }
+
+// Manejador de acciones con delegación de eventos
+async function handleProductAction(event) {
+  const target = event.target;
+  const id = target.closest('button')?.dataset.id;
+  
+  if (!id) return;
+
+  if (target.classList.contains('delete')) {
+    if (!confirm('¿Eliminar este producto?')) return;
+    
+    try {
+      const res = await fetch('/api/admin/products/' + id, { method: 'DELETE' });
+      const data = await res.json();
+      
+      if (res.ok) {
+        showMessage('✓ Producto eliminado.', true);
+        loadProducts();
+      } else {
+        showMessage(`❌ ${data.error}`, false);
+      }
+    } catch (err) {
+      console.error('Error:', err);
+      showMessage('❌ Error de conexión.', false);
+    }
+  } 
+  else if (target.classList.contains('edit')) {
+    // Buscar el producto en la lista actual
+    const res = await fetch('/api/products');
+    const products = await res.json();
+    const product = products.find(p => p.id === id);
+    
+    if (product) {
+      editModal.style.display = 'block';
+      editForm.elements['id'].value = product.id;
+      editForm.elements['name'].value = product.name || '';
+      editForm.elements['category'].value = product.category || '';
+      editForm.elements['stock'].value = product.stock || 0;
+      editForm.elements['price'].value = Number(product.price || 0).toFixed(2);
+    }
+  }
+}
+
+// Cancel edit
+cancelEditBtn.addEventListener('click', () => {
+  editModal.style.display = 'none';
+  editForm.reset();
+});
+
+// Submit edit form
+editForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = editForm.querySelector('button[type="submit"]');
+  btn.disabled = true;
+
+  try {
+    const id = editForm.elements['id'].value;
+    const fd = new FormData(editForm);
+    const res = await fetch('/api/admin/products/' + id, { method: 'PUT', body: fd });
+    const data = await res.json();
+
+    if (data.ok) {
+      showMessage('✓ Producto actualizado.', true);
+      editModal.style.display = 'none';
+      editForm.reset();
+      loadProducts();
+    } else {
+      showMessage(`❌ ${data.details ? data.details.join(', ') : data.error}`, false);
+    }
+  } catch (err) {
+    console.error('Error actualizando producto:', err);
+    showMessage('❌ Error de conexión.', false);
+  } finally {
+    btn.disabled = false;
+  }
+});
