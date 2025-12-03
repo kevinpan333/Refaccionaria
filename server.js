@@ -8,51 +8,58 @@ const session = require('express-session');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const sqlite3 = require('sqlite3');
-const { open } = require('sqlite');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-
-// Ensure uploads folder exists
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
-
-// SQLite setup
 const DATA_DIR = path.join(__dirname, 'data');
+const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
+const APPOINTMENTS_FILE = path.join(DATA_DIR, 'appointments.json');
+
+// Ensure necessary directories exist
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
-const DB_PATH = path.join(DATA_DIR, 'refaccionaria.db');
+// Initialize JSON files if they don't exist
+if (!fs.existsSync(PRODUCTS_FILE)) fs.writeFileSync(PRODUCTS_FILE, JSON.stringify([]));
+if (!fs.existsSync(APPOINTMENTS_FILE)) fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify([]));
 
-let db; // will hold sqlite database connection
+// Funciones para leer/escribir archivos JSON
+function readProducts() {
+  try {
+    const data = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
+    return JSON.parse(data || '[]');
+  } catch (err) {
+    console.error('Error leyendo productos:', err);
+    return [];
+  }
+}
 
-async function initDb() {
-  db = await open({ filename: DB_PATH, driver: sqlite3.Database });
+function writeProducts(products) {
+  try {
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+  } catch (err) {
+    console.error('Error escribiendo productos:', err);
+  }
+}
 
-  await db.exec(`CREATE TABLE IF NOT EXISTS products (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    category TEXT,
-    stock INTEGER,
-    price REAL,
-    image TEXT,
-    createdAt TEXT
-  )`);
+function readAppointments() {
+  try {
+    const data = fs.readFileSync(APPOINTMENTS_FILE, 'utf-8');
+    return JSON.parse(data || '[]');
+  } catch (err) {
+    console.error('Error leyendo citas:', err);
+    return [];
+  }
+}
 
-  await db.exec(`CREATE TABLE IF NOT EXISTS appointments (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    whatsapp TEXT,
-    carModel TEXT,
-    description TEXT,
-    notas TEXT,
-    date TEXT,
-    time TEXT,
-    createdAt TEXT
-  )`);
-
-  console.log('✓ SQLite inicializado en', DB_PATH);
+function writeAppointments(appointments) {
+  try {
+    fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify(appointments, null, 2));
+  } catch (err) {
+    console.error('Error escribiendo citas:', err);
+  }
 }
 
 app.use(cors());
@@ -78,36 +85,6 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
-
-// Public API - Get all products
-app.get('/api/products', async (req, res) => {
-  try {
-    const products = await db.all('SELECT * FROM products ORDER BY datetime(createdAt) DESC');
-    res.json(products);
-  } catch (err) {
-    console.error('Error fetching products:', err);
-    res.status(500).json({ error: 'Error al obtener productos' });
-  }
-});
-
-// Admin auth
-app.post('/api/admin/login', (req, res) => {
-  const { password } = req.body;
-  const ADMIN_PASS = process.env.ADMIN_PASS || 'artemio123';
-  if (password === ADMIN_PASS) {
-    req.session.isAdmin = true;
-    res.json({ ok: true });
-  } else res.status(401).json({ ok: false, message: 'Contraseña incorrecta' });
-});
-
-app.post('/api/admin/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
-});
-
-function requireAdmin(req, res, next) {
-  if (req.session && req.session.isAdmin) return next();
-  return res.status(403).json({ ok: false, message: 'Acceso denegado' });
-}
 
 // Validación de producto
 function validateProduct(data) {
@@ -135,100 +112,6 @@ function validateProduct(data) {
   
   return errors;
 }
-
-// Create product
-app.post('/api/admin/products', requireAdmin, upload.single('image'), async (req, res) => {
-  try {
-    const { name, category, stock, price } = req.body;
-    
-    // Validar entrada
-    const errors = validateProduct({ name, category, stock, price });
-    if (errors.length > 0) {
-      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
-    }
-    
-    const id = uuidv4();
-    const image = req.file ? '/uploads/' + path.basename(req.file.path) : null;
-    const createdAt = new Date().toISOString();
-
-    await db.run(
-      `INSERT INTO products (id, name, category, stock, price, image, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      id, name.trim(), category.trim(), Number(stock), Number(price), image, createdAt
-    );
-
-    const product = await db.get('SELECT * FROM products WHERE id = ?', id);
-    res.json({ ok: true, product });
-  } catch (err) {
-    console.error('Error creating product:', err);
-    res.status(500).json({ ok: false, error: 'Error al crear producto' });
-  }
-});
-
-// Update product
-app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, category, stock, price } = req.body;
-    
-    // Validar entrada
-    const errors = validateProduct({ name, category, stock, price });
-    if (errors.length > 0) {
-      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
-    }
-
-    const product = await db.get('SELECT * FROM products WHERE id = ?', id);
-    if (!product) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
-
-    // Delete old image if updating with new one
-    if (req.file && product.image) {
-      try { fs.unlinkSync(path.join(__dirname, product.image)); } catch (e) {}
-    }
-
-    const updated = {
-      name: name && name.trim().length > 0 ? name.trim() : product.name,
-      category: category && category.trim().length > 0 ? category.trim() : product.category,
-      stock: stock !== undefined && !isNaN(Number(stock)) ? Number(stock) : product.stock,
-      price: price !== undefined && !isNaN(Number(price)) ? Number(price) : product.price,
-      image: req.file ? '/uploads/' + path.basename(req.file.path) : product.image
-    };
-
-    await db.run(
-      `UPDATE products SET name = ?, category = ?, stock = ?, price = ?, image = ? WHERE id = ?`,
-      updated.name, updated.category, updated.stock, updated.price, updated.image, id
-    );
-
-    const prod = await db.get('SELECT * FROM products WHERE id = ?', id);
-    res.json({ ok: true, product: prod });
-  } catch (err) {
-    console.error('Error updating product:', err);
-    res.status(500).json({ ok: false, error: 'Error al actualizar producto' });
-  }
-});
-
-// Delete product
-app.delete('/api/admin/products/:id', requireAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!id || id.trim().length === 0) {
-      return res.status(400).json({ ok: false, error: 'ID de producto inválido' });
-    }
-
-    const product = await db.get('SELECT * FROM products WHERE id = ?', id);
-    if (!product) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
-
-    await db.run('DELETE FROM products WHERE id = ?', id);
-
-    if (product.image) {
-      try { fs.unlinkSync(path.join(__dirname, product.image)); } catch (e) {}
-    }
-
-    res.json({ ok: true, message: 'Producto eliminado exitosamente' });
-  } catch (err) {
-    console.error('Error deleting product:', err);
-    res.status(500).json({ ok: false, error: 'Error al eliminar producto' });
-  }
-});
 
 // Validación de cita
 function validateAppointment(data) {
@@ -263,8 +146,144 @@ function validateAppointment(data) {
   return errors;
 }
 
+// Public API - Get all products
+app.get('/api/products', (req, res) => {
+  try {
+    const products = readProducts().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json(products);
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({ error: 'Error al obtener productos' });
+  }
+});
+
+// Admin auth
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  const ADMIN_PASS = process.env.ADMIN_PASS || 'artemio123';
+  if (password === ADMIN_PASS) {
+    req.session.isAdmin = true;
+    res.json({ ok: true });
+  } else res.status(401).json({ ok: false, message: 'Contraseña incorrecta' });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+function requireAdmin(req, res, next) {
+  if (req.session && req.session.isAdmin) return next();
+  return res.status(403).json({ ok: false, message: 'Acceso denegado' });
+}
+
+// Create product
+app.post('/api/admin/products', requireAdmin, upload.single('image'), (req, res) => {
+  try {
+    const { name, category, stock, price } = req.body;
+    
+    // Validar entrada
+    const errors = validateProduct({ name, category, stock, price });
+    if (errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
+    }
+    
+    const id = uuidv4();
+    const image = req.file ? '/uploads/' + path.basename(req.file.path) : null;
+    const createdAt = new Date().toISOString();
+
+    const product = {
+      id,
+      name: name.trim(),
+      category: category.trim(),
+      stock: Number(stock),
+      price: Number(price),
+      image,
+      createdAt
+    };
+
+    const products = readProducts();
+    products.push(product);
+    writeProducts(products);
+
+    res.json({ ok: true, product });
+  } catch (err) {
+    console.error('Error creating product:', err);
+    res.status(500).json({ ok: false, error: 'Error al crear producto' });
+  }
+});
+
+// Update product
+app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, category, stock, price } = req.body;
+    
+    // Validar entrada
+    const errors = validateProduct({ name, category, stock, price });
+    if (errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Validación fallida', details: errors });
+    }
+
+    const products = readProducts();
+    const productIndex = products.findIndex(p => p.id === id);
+    if (productIndex === -1) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
+
+    const product = products[productIndex];
+
+    // Delete old image if updating with new one
+    if (req.file && product.image) {
+      try { fs.unlinkSync(path.join(__dirname, product.image)); } catch (e) {}
+    }
+
+    const updated = {
+      ...product,
+      name: name && name.trim().length > 0 ? name.trim() : product.name,
+      category: category && category.trim().length > 0 ? category.trim() : product.category,
+      stock: stock !== undefined && !isNaN(Number(stock)) ? Number(stock) : product.stock,
+      price: price !== undefined && !isNaN(Number(price)) ? Number(price) : product.price,
+      image: req.file ? '/uploads/' + path.basename(req.file.path) : product.image
+    };
+
+    products[productIndex] = updated;
+    writeProducts(products);
+
+    res.json({ ok: true, product: updated });
+  } catch (err) {
+    console.error('Error updating product:', err);
+    res.status(500).json({ ok: false, error: 'Error al actualizar producto' });
+  }
+});
+
+// Delete product
+app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id || id.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: 'ID de producto inválido' });
+    }
+
+    const products = readProducts();
+    const productIndex = products.findIndex(p => p.id === id);
+    if (productIndex === -1) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
+
+    const product = products[productIndex];
+    products.splice(productIndex, 1);
+    writeProducts(products);
+
+    if (product.image) {
+      try { fs.unlinkSync(path.join(__dirname, product.image)); } catch (e) {}
+    }
+
+    res.json({ ok: true, message: 'Producto eliminado exitosamente' });
+  } catch (err) {
+    console.error('Error deleting product:', err);
+    res.status(500).json({ ok: false, error: 'Error al eliminar producto' });
+  }
+});
+
 // Appointments
-app.post('/api/appointments', async (req, res) => {
+app.post('/api/appointments', (req, res) => {
   try {
     const { name, whatsapp, carModel, description, date, time, notas } = req.body;
     
@@ -277,10 +296,21 @@ app.post('/api/appointments', async (req, res) => {
     const id = uuidv4();
     const createdAt = new Date().toISOString();
 
-    await db.run(
-      `INSERT INTO appointments (id, name, whatsapp, carModel, description, notas, date, time, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, name.trim(), whatsapp.trim(), carModel.trim(), description.trim(), notas || '', date.trim(), time.trim(), createdAt
-    );
+    const appointment = {
+      id,
+      name: name.trim(),
+      whatsapp: whatsapp.trim(),
+      carModel: carModel.trim(),
+      description: description.trim(),
+      notas: notas || '',
+      date: date.trim(),
+      time: time.trim(),
+      createdAt
+    };
+
+    const appointments = readAppointments();
+    appointments.push(appointment);
+    writeAppointments(appointments);
 
     // Send email to configured admin email
     const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'yairivanyanez23@cbtis179.edu.mx';
@@ -318,7 +348,7 @@ app.post('/api/appointments', async (req, res) => {
         res.json({ ok: true, emailed: false, error: String(err) });
       });
     } else {
-      console.warn('SMTP no configurado. La cita se guardó en la base SQLite pero no se envió correo.');
+      console.warn('SMTP no configurado. La cita se guardó localmente pero no se envió correo.');
       res.json({ ok: true, emailed: false, message: 'SMTP no configurado. Revisa README para configurar.' });
     }
   } catch (err) {
@@ -332,10 +362,6 @@ app.get('*', (req, res) => {
   res.status(404).send('Not found');
 });
 
-// Initialize DB then start server
-initDb().then(() => {
-  app.listen(PORT, () => console.log(`\n✓ Servidor iniciado en http://localhost:${PORT}\n`));
-}).catch(err => {
-  console.error('Error inicializando la base de datos:', err);
-});
+// Start server
+app.listen(PORT, () => console.log(`\n✓ Servidor iniciado en http://localhost:${PORT}\n`));
 
